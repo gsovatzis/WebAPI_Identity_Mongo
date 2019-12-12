@@ -16,6 +16,9 @@ using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using AutoMapper;
+using WebAPI_Identity_Mongo.Helpers;
+using WebAPI_Identity_Mongo.Services;
 
 namespace WebAPI_Identity_Mongo
 {
@@ -33,6 +36,8 @@ namespace WebAPI_Identity_Mongo
         {
             services.AddCors();
 
+            
+
             // Configure Identity MongoDB
             services.AddIdentityMongoDbProvider<MyUser, MyRole>(identityOptions =>
                             {
@@ -48,7 +53,8 @@ namespace WebAPI_Identity_Mongo
                             }
             );
 
-
+            services.AddAutoMapper(typeof(AutoMapperProfile));
+            
             // Add Jwt Authentication
             JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear(); // => remove default claims
             services.AddAuthentication(options =>
@@ -62,19 +68,44 @@ namespace WebAPI_Identity_Mongo
                            JwtBearerDefaults.AuthenticationScheme;
             }).AddJwtBearer(cfg =>
             {
+
+                cfg.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = context =>
+                    {
+                        var userService = context.HttpContext.RequestServices.GetRequiredService<IUserService>();
+                        var userId = context.Principal.Identity.Name;
+                        var user = userService.GetById(userId);
+                        if (user == null)
+                        {
+                            // return unauthorized if user no longer exists
+                            context.Fail("Unauthorized");
+                        }
+                        return Task.CompletedTask;
+                    }
+                };
+
                 cfg.RequireHttpsMetadata = false;
                 cfg.SaveToken = true;
                 cfg.TokenValidationParameters =
                        new TokenValidationParameters
                        {
+                           ValidateIssuerSigningKey = true,
+                           IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Configuration["JwtKey"])),
+                           ValidateIssuer = false,
+                           ValidateAudience = false
+                           
+                           /*
                            ValidIssuer = Configuration["JwtIssuer"],
                            ValidAudience = Configuration["JwtIssuer"],
-                           IssuerSigningKey =
-                        new SymmetricSecurityKey(Encoding.UTF8.GetBytes(Configuration["JwtKey"])),
                            ClockSkew = TimeSpan.Zero // remove delay of token when expire
+                           */
                        };
             });
 
+            // configure DI for application services
+            services.AddScoped<IUserService, UserService>();
+            
             services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
         }
 
@@ -96,6 +127,8 @@ namespace WebAPI_Identity_Mongo
                 .AllowAnyOrigin()
                 .AllowAnyMethod()
                 .AllowAnyHeader());
+
+            app.UseAuthentication();
 
             app.UseHttpsRedirection();
             app.UseMvc();
